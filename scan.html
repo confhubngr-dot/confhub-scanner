@@ -96,12 +96,13 @@ body{background:#0B1524;color:#fff;min-height:100vh}
     <div class="bar">
       <span class="dot" id="netDot"></span>
       <span id="deskName">Door 1</span>
-      <span class="count"><b id="inCount">0</b> / <span id="totCount">0</span> in</span>
+      <span class="count"><b id="inCount">0</b> / <span id="totCount">0</span> in today</span>
     </div>
 
     <div class="tabs">
       <button id="tabScan" class="on">Scan</button>
-      <button id="tabFind">Find by name</button>
+      <button id="tabFind">Find</button>
+      <button id="tabWalk">Walk-in</button>
     </div>
 
     <div id="paneScan">
@@ -115,6 +116,18 @@ body{background:#0B1524;color:#fff;min-height:100vh}
     <div id="paneFind" class="hide search">
       <input id="q" placeholder="Type a surname…" autocomplete="off">
       <div class="hits" id="hits"></div>
+    </div>
+
+    <div id="paneWalk" class="hide search">
+      <p class="tiny" style="text-align:left;margin:0 0 10px">
+        Only for delegates who are <b>not</b> on the list. They will be added and
+        checked in, flagged for the treasurer to collect payment.
+      </p>
+      <input id="wName" placeholder="Full name" autocomplete="off">
+      <input id="wOrg" placeholder="Institution" autocomplete="off" style="margin-top:8px">
+      <input id="wCat" placeholder="Category (e.g. Consultant)" autocomplete="off" style="margin-top:8px">
+      <button class="btn" id="wAdd" style="margin-top:12px">Add &amp; check in</button>
+      <p class="tiny" id="wMsg" style="min-height:1.2em"></p>
     </div>
 
     <p class="tiny">
@@ -10248,13 +10261,23 @@ function findAlignmentPattern(matrix, alignmentPatternQuads, topRight, topLeft, 
   var video, canvas, ctx, stream = null;
 
   var $ = function(id){ return document.getElementById(id); };
+  function today(){
+    var d = new Date();
+    return d.getFullYear() + '-' +
+           ('0'+(d.getMonth()+1)).slice(-2) + '-' +
+           ('0'+d.getDate()).slice(-2);
+  }
+  function daysOf(d){
+    return String(d.d||'').split(',').map(function(x){ return x.trim(); })
+                                     .filter(function(x){ return x; });
+  }
   function save(k,v){ try{ localStorage.setItem(k, JSON.stringify(v)); }catch(e){} }
   function load(k,d){ try{ var v = localStorage.getItem(k); return v ? JSON.parse(v) : d; }catch(e){ return d; } }
 
   /* ── counts ── */
   function refreshCounts(){
-    var tot = 0, inHall = 0;
-    for (var id in roster){ tot++; if (roster[id].t) inHall++; }
+    var tot = 0, inHall = 0, td = today();
+    for (var id in roster){ tot++; if (daysOf(roster[id]).indexOf(td) !== -1) inHall++; }
     $('totCount').textContent = tot;
     $('inCount').textContent = inHall;
     $('queueInfo').textContent = queue.length ? (queue.length + ' waiting to sync') : 'All synced';
@@ -10299,15 +10322,22 @@ function findAlignmentPattern(matrix, alignmentPatternQuads, topRight, topLeft, 
 
     var d = roster[code];
     if (!d){ flash('bad', 'NOT FOUND', code, 'Send them to the desk'); return; }
-    if (d.t){
-      flash('dup', 'ALREADY IN', d.n, 'Scanned ' + shortTime(d.t));
+
+    var td = today(), list = daysOf(d);
+    if (list.indexOf(td) !== -1){
+      flash('dup', 'ALREADY IN TODAY', d.n, 'Checked in earlier today');
       return;
     }
-    d.t = new Date().toISOString();
-    queue.push({ id: code, at: d.t });
+
+    var at = new Date().toISOString();
+    list.push(td);
+    d.d = list.join(', ');
+    d.t = d.t || at;
+    queue.push({ id: code, at: at, day: td });
     save(LS.roster, roster); save(LS.queue, queue);
     refreshCounts();
-    flash('ok', 'WELCOME', d.n, d.o || '');
+    var nth = list.length;
+    flash('ok', 'WELCOME', d.n, (d.o || '') + (nth > 1 ? '  \u00b7  day ' + nth : ''));
     sync();
   }
 
@@ -10374,14 +10404,46 @@ function findAlignmentPattern(matrix, alignmentPatternQuads, topRight, topLeft, 
   });
 
   /* ── tabs ── */
-  $('tabScan').addEventListener('click', function(){
-    $('tabScan').className='on'; $('tabFind').className='';
-    $('paneScan').className=''; $('paneFind').className='hide search';
-  });
-  $('tabFind').addEventListener('click', function(){
-    $('tabFind').className='on'; $('tabScan').className='';
-    $('paneFind').className='search'; $('paneScan').className='hide';
-    $('q').focus();
+  function showPane(which){
+    ['Scan','Find','Walk'].forEach(function(t){
+      $('tab'+t).className = (t === which) ? 'on' : '';
+    });
+    $('paneScan').className = which === 'Scan' ? '' : 'hide';
+    $('paneFind').className = which === 'Find' ? 'search' : 'hide search';
+    $('paneWalk').className = which === 'Walk' ? 'search' : 'hide search';
+    if (which === 'Find') $('q').focus();
+    if (which === 'Walk') $('wName').focus();
+  }
+  $('tabScan').addEventListener('click', function(){ showPane('Scan'); });
+  $('tabFind').addEventListener('click', function(){ showPane('Find'); });
+  $('tabWalk').addEventListener('click', function(){ showPane('Walk'); });
+
+  /* ── walk-in: works fully offline ── */
+  var WALK_ALPHA = "ABCDEFGHJKLMNPQRTUVWXY2346789";
+  function walkId(){
+    var s = "";
+    for (var i=0;i<8;i++) s += WALK_ALPHA.charAt(Math.floor(Math.random()*WALK_ALPHA.length));
+    return "WALK-" + s;
+  }
+  $('wAdd').addEventListener('click', function(){
+    var name = $('wName').value.trim();
+    var org  = $('wOrg').value.trim();
+    var cat  = $('wCat').value.trim();
+    var msg  = $('wMsg');
+    if (name.length < 2){ msg.style.color='#F59E0B'; msg.textContent = 'Enter the delegate\'s name.'; return; }
+
+    var id = walkId(), now = new Date().toISOString();
+    roster[id] = { n:name, o:org, c:cat, t:now, d:today() };
+    queue.push({ id:id, at:now, day:today(), walkin:true, n:name, o:org, c:cat });
+    save(LS.roster, roster); save(LS.queue, queue);
+    refreshCounts();
+
+    $('wName').value=''; $('wOrg').value=''; $('wCat').value='';
+    msg.style.color='#10B981';
+    msg.textContent = name + ' added and checked in.';
+    lastCode = '';
+    flash('ok', 'WELCOME', name, org || 'Walk-in');
+    sync();
   });
 
   /* ── sync ── */
@@ -10418,9 +10480,14 @@ function findAlignmentPattern(matrix, alignmentPatternQuads, topRight, topLeft, 
       .then(function(res){
         if (!res || !res.ok) return cb(res && res.error ? res.error : 'Could not load the list');
         var m = {};
-        res.delegates.forEach(function(d){ m[d.id] = { n:d.n, o:d.o, c:d.c, t:d.t }; });
+        res.delegates.forEach(function(d){ m[d.id] = { n:d.n, o:d.o, c:d.c, t:d.t, d:d.d||'' }; });
         // keep any local check-ins not yet synced
-        queue.forEach(function(q){ if (m[q.id] && !m[q.id].t) m[q.id].t = q.at; });
+        queue.forEach(function(q){
+          if (!m[q.id]) return;
+          var l = String(m[q.id].d||'').split(',').map(function(x){ return x.trim(); })
+                                                  .filter(function(x){ return x; });
+          if (q.day && l.indexOf(q.day) === -1){ l.push(q.day); m[q.id].d = l.join(', '); }
+        });
         roster = m;
         save(LS.roster, roster);
         cb(null, res.count);
