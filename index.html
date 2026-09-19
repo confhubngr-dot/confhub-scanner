@@ -60,8 +60,9 @@ body{background:#0B1524;color:#fff;min-height:100vh}
 .result .tap{position:absolute;bottom:34px;font-size:.85rem;opacity:.8}
 
 /* ── search ── */
-.search input{width:100%;padding:13px 15px;border-radius:12px;border:1.5px solid #24354F;
+.search input,.search select{width:100%;padding:13px 15px;border-radius:12px;border:1.5px solid #24354F;
               background:#12203A;color:#fff;font-size:1rem;font-family:inherit}
+.search select option{background:#12203A;color:#fff}
 .hits{margin-top:10px;max-height:44vh;overflow:auto}
 .hit{display:flex;align-items:center;gap:10px;padding:12px 14px;background:#12203A;
      border-radius:12px;margin-bottom:8px;text-align:left;width:100%;color:#fff}
@@ -125,7 +126,10 @@ body{background:#0B1524;color:#fff;min-height:100vh}
       </p>
       <input id="wName" placeholder="Full name" autocomplete="off">
       <input id="wOrg" placeholder="Institution" autocomplete="off" style="margin-top:8px">
-      <input id="wCat" placeholder="Category (e.g. Consultant)" autocomplete="off" style="margin-top:8px">
+      <input id="wEmail" type="email" placeholder="Email (for receipt &amp; certificate)"
+             autocomplete="off" autocapitalize="off" spellcheck="false" style="margin-top:8px">
+      <input id="wPhone" type="tel" placeholder="Phone (optional)" autocomplete="off" style="margin-top:8px">
+      <select id="wCat" style="margin-top:8px"><option value="">Choose category…</option></select>
       <button class="btn" id="wAdd" style="margin-top:12px">Add &amp; check in</button>
       <p class="tiny" id="wMsg" style="min-height:1.2em"></p>
     </div>
@@ -10254,7 +10258,8 @@ function findAlignmentPattern(matrix, alignmentPatternQuads, topRight, topLeft, 
 
 <script>
 (function(){
-  var LS = { url:'ch_url', key:'ch_key', desk:'ch_desk', roster:'ch_roster', queue:'ch_queue' };
+  var LS = { url:'ch_url', key:'ch_key', desk:'ch_desk', roster:'ch_roster',
+             queue:'ch_queue', cats:'ch_cats' };
   var roster = {};      // id -> {n,o,c,t}
   var queue = [];       // pending check-ins
   var scanning = false, lastCode = '', lastAt = 0;
@@ -10425,22 +10430,45 @@ function findAlignmentPattern(matrix, alignmentPatternQuads, topRight, topLeft, 
     for (var i=0;i<8;i++) s += WALK_ALPHA.charAt(Math.floor(Math.random()*WALK_ALPHA.length));
     return "WALK-" + s;
   }
-  $('wAdd').addEventListener('click', function(){
-    var name = $('wName').value.trim();
-    var org  = $('wOrg').value.trim();
-    var cat  = $('wCat').value.trim();
-    var msg  = $('wMsg');
-    if (name.length < 2){ msg.style.color='#F59E0B'; msg.textContent = 'Enter the delegate\'s name.'; return; }
+  function fillCategories(){
+    var sel = $('wCat');
+    if (!sel) return;
+    var cats = load(LS.cats, []) || [];
+    sel.innerHTML = '<option value="">Choose category\u2026</option>' +
+      cats.map(function(c){
+        return '<option value="' + c.name.replace(/"/g,'&quot;') + '">' +
+               c.name + (c.fee ? '  \u2014  ' + Number(c.fee).toLocaleString() : '') + '</option>';
+      }).join('');
+  }
 
-    var id = walkId(), now = new Date().toISOString();
-    roster[id] = { n:name, o:org, c:cat, t:now, d:today() };
-    queue.push({ id:id, at:now, day:today(), walkin:true, n:name, o:org, c:cat });
+  $('wAdd').addEventListener('click', function(){
+    var name  = $('wName').value.trim();
+    var org   = $('wOrg').value.trim();
+    var email = $('wEmail').value.trim();
+    var phone = $('wPhone').value.trim();
+    var cat   = $('wCat').value;
+    var msg   = $('wMsg');
+
+    if (name.length < 2){
+      msg.style.color='#F59E0B'; msg.textContent = 'Enter the delegate\'s name.'; return;
+    }
+    if (email && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)){
+      msg.style.color='#F59E0B'; msg.textContent = 'That email does not look right. Check it or clear it.'; return;
+    }
+
+    var id = walkId(), now = new Date().toISOString(), td = today();
+    roster[id] = { n:name, o:org, c:cat, t:now, d:td };
+    queue.push({ id:id, at:now, day:td, walkin:true,
+                 n:name, o:org, c:cat, e:email, p:phone });
     save(LS.roster, roster); save(LS.queue, queue);
     refreshCounts();
 
-    $('wName').value=''; $('wOrg').value=''; $('wCat').value='';
-    msg.style.color='#10B981';
-    msg.textContent = name + ' added and checked in.';
+    $('wName').value=''; $('wOrg').value=''; $('wEmail').value='';
+    $('wPhone').value=''; $('wCat').value='';
+    msg.style.color = email ? '#10B981' : '#F59E0B';
+    msg.textContent = email
+      ? name + ' added and checked in.'
+      : name + ' added \u2014 but with no email they cannot be sent a receipt or certificate.';
     lastCode = '';
     flash('ok', 'WELCOME', name, org || 'Walk-in');
     sync();
@@ -10490,6 +10518,8 @@ function findAlignmentPattern(matrix, alignmentPatternQuads, topRight, topLeft, 
         });
         roster = m;
         save(LS.roster, roster);
+        if (res.categories) save(LS.cats, res.categories);
+        fillCategories();
         cb(null, res.count);
       })
       .catch(function(){ cb('No connection. Check the API URL.'); });
@@ -10519,6 +10549,7 @@ function findAlignmentPattern(matrix, alignmentPatternQuads, topRight, topLeft, 
     $('login').className = 'hide';
     $('main').className = '';
     $('deskName').textContent = load(LS.desk,'Desk 1');
+    fillCategories();
     refreshCounts();
     startCam();
     sync();
