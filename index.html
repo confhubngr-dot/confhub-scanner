@@ -10321,6 +10321,22 @@ function findAlignmentPattern(matrix, alignmentPatternQuads, topRight, topLeft, 
   function handleCode(code){
     code = String(code || '').trim();
     if (!code) return;
+
+    // A badge may carry a link with the delegate ID after the # — either a
+    // plain ID (badge) or an encoded pass payload. Pull the ID out either way.
+    if (code.indexOf('#') !== -1 && /^https?:/i.test(code)){
+      var frag = code.split('#')[1] || '';
+      if (roster[frag]){
+        code = frag;                                   // plain ID on the badge
+      } else {
+        try{
+          var b64 = frag.replace(/-/g,'+').replace(/_/g,'/');
+          while (b64.length % 4) b64 += '=';
+          var obj = JSON.parse(decodeURIComponent(escape(atob(b64))));
+          if (obj && obj.i) code = String(obj.i);       // full pass link
+        }catch(e){ /* neither - leave it alone */ }
+      }
+    }
     var now = Date.now();
     if (code === lastCode && now - lastAt < 2500) return;   // ignore camera repeats
     lastCode = code; lastAt = now;
