@@ -57,6 +57,8 @@ body{background:#0B1524;color:#fff;min-height:100vh}
 .result .big{font-size:2.4rem;font-weight:800;letter-spacing:-.03em;margin-bottom:10px}
 .result .who{font-size:1.5rem;font-weight:700;line-height:1.2}
 .result .sub{font-size:1rem;opacity:.9;margin-top:8px}
+.result .lead-c{font-family:"IBM Plex Mono",monospace;font-size:1.15rem;margin-top:10px;
+                letter-spacing:.02em;word-break:break-all}
 .result .tap{position:absolute;bottom:34px;font-size:.85rem;opacity:.8}
 
 /* ── search ── */
@@ -73,6 +75,8 @@ body{background:#0B1524;color:#fff;min-height:100vh}
 .tabs button{flex:1;padding:11px;border-radius:12px;background:#12203A;color:#93A5BB;font-weight:600;font-size:.9rem}
 .tabs button.on{background:var(--grad);color:#fff}
 .hide{display:none}
+.boothnote{background:#12203A;border:1px solid #24354F;border-radius:12px;padding:11px 14px;
+           font-size:.85rem;color:#93A5BB;margin-bottom:12px}
 .tiny{font-size:.78rem;color:#93A5BB;text-align:center;margin-top:14px}
 .tiny button{background:none;color:#7FB6DE;text-decoration:underline;font-size:.78rem}
 </style>
@@ -86,7 +90,7 @@ body{background:#0B1524;color:#fff;min-height:100vh}
     <h1>ConfHub Scanner</h1>
     <p>Enter the desk passcode to load the delegate list.</p>
     <input id="url" placeholder="API URL (ends in /exec)" autocomplete="off">
-    <input id="key" type="password" placeholder="Desk passcode" autocomplete="off">
+    <input id="key" type="password" placeholder="Desk or exhibitor passcode" autocomplete="off">
     <input id="desk" placeholder="Desk name, e.g. Door 1" autocomplete="off">
     <button class="btn" id="load">Load delegate list</button>
     <p class="msg" id="loginMsg"></p>
@@ -97,8 +101,11 @@ body{background:#0B1524;color:#fff;min-height:100vh}
     <div class="bar">
       <span class="dot" id="netDot"></span>
       <span id="deskName">Door 1</span>
-      <span class="count"><b id="inCount">0</b> / <span id="totCount">0</span> in today</span>
+      <span class="count"><b id="inCount">0</b> / <span id="totCount">0</span> <span id="countLabel">in today</span></span>
     </div>
+
+    <p id="boothNote" class="hide">Scan a delegate's badge to capture their details. They will be
+      emailed to you after the conference.</p>
 
     <div class="tabs">
       <button id="tabScan" class="on">Scan</button>
@@ -10259,7 +10266,8 @@ function findAlignmentPattern(matrix, alignmentPatternQuads, topRight, topLeft, 
 <script>
 (function(){
   var LS = { url:'ch_url', key:'ch_key', desk:'ch_desk', roster:'ch_roster',
-             queue:'ch_queue', cats:'ch_cats' };
+             queue:'ch_queue', cats:'ch_cats', mode:'ch_mode', exh:'ch_exh' };
+  function isBooth(){ return load(LS.mode,'desk') === 'booth'; }
   var roster = {};      // id -> {n,o,c,t}
   var queue = [];       // pending check-ins
   var scanning = false, lastCode = '', lastAt = 0;
@@ -10282,7 +10290,11 @@ function findAlignmentPattern(matrix, alignmentPatternQuads, topRight, topLeft, 
   /* ── counts ── */
   function refreshCounts(){
     var tot = 0, inHall = 0, td = today();
-    for (var id in roster){ tot++; if (daysOf(roster[id]).indexOf(td) !== -1) inHall++; }
+    for (var id in roster){
+      tot++;
+      if (isBooth()) { if (roster[id].lead) inHall++; }
+      else if (daysOf(roster[id]).indexOf(td) !== -1) inHall++;
+    }
     $('totCount').textContent = tot;
     $('inCount').textContent = inHall;
     $('queueInfo').textContent = queue.length ? (queue.length + ' waiting to sync') : 'All synced';
@@ -10303,6 +10315,25 @@ function findAlignmentPattern(matrix, alignmentPatternQuads, topRight, topLeft, 
   }
   function hideResult(){ $('result').className = 'result'; }
   $('result').addEventListener('click', hideResult);
+
+  /* At a stand the details stay up until tapped, so the rep can write
+     them into their own diary. */
+  function leadCard(kind, big, d){
+    var r = $('result');
+    r.className = 'result show ' + kind;
+    $('rBig').textContent = big;
+    $('rWho').textContent = d.n || '';
+    var bits = [];
+    if (d.o) bits.push(d.o);
+    if (d.c) bits.push(d.c);
+    var sub = $('rSub');
+    sub.innerHTML = (bits.length ? '<div>' + bits.join(' \u00b7 ') + '</div>' : '') +
+      (d.e ? '<div class="lead-c">' + d.e + '</div>' : '') +
+      (d.p ? '<div class="lead-c">' + d.p + '</div>' : '');
+    try{ navigator.vibrate && navigator.vibrate(kind === 'ok' ? 90 : [70,60,70]); }catch(e){}
+    beep(kind === 'ok');
+    clearTimeout(flash._t);            // no auto-dismiss: tap to continue
+  }
 
   var actx = null;
   function beep(good){
@@ -10342,11 +10373,25 @@ function findAlignmentPattern(matrix, alignmentPatternQuads, topRight, topLeft, 
     lastCode = code; lastAt = now;
 
     var d = roster[code];
-    if (!d){ flash('bad', 'NOT FOUND', code, 'Send them to the desk'); return; }
+    if (!d){ flash('bad', 'NOT FOUND', code, isBooth() ? 'Not a delegate of this conference'
+                                                       : 'Send them to the desk'); return; }
+
+    // Exhibitor stand: capture a lead, never check anyone in
+    if (isBooth()){
+      if (d.lead){ leadCard('dup', 'ALREADY CAPTURED', d); return; }
+      var at = new Date().toISOString();
+      d.lead = at;
+      queue.push({ id: code, at: at, lead: true });
+      save(LS.roster, roster); save(LS.queue, queue);
+      refreshCounts();
+      leadCard('ok', 'CAPTURED', d);
+      sync();
+      return;
+    }
 
     var td = today(), list = daysOf(d);
     if (list.indexOf(td) !== -1){
-      flash('dup', 'ALREADY IN TODAY', d.n, 'Checked in earlier today');
+      flash('dup', 'ALREADY IN TODAY', d.n, d.t ? 'Checked in at ' + shortTime(d.t) : 'Checked in earlier today');
       return;
     }
 
@@ -10499,8 +10544,9 @@ function findAlignmentPattern(matrix, alignmentPatternQuads, topRight, topLeft, 
     fetch(load(LS.url,''), {
       method:'POST',
       headers:{ 'Content-Type':'text/plain;charset=utf-8' },   // avoids a CORS preflight
-      body: JSON.stringify({ action:'checkin', key: load(LS.key,''),
-                             desk: load(LS.desk,''), items: batch })
+      body: JSON.stringify(isBooth()
+        ? { action:'lead', key: load(LS.key,''), items: batch }
+        : { action:'checkin', key: load(LS.key,''), desk: load(LS.desk,''), items: batch })
     })
     .then(function(r){ return r.json(); })
     .then(function(res){
@@ -10524,7 +10570,11 @@ function findAlignmentPattern(matrix, alignmentPatternQuads, topRight, topLeft, 
       .then(function(res){
         if (!res || !res.ok) return cb(res && res.error ? res.error : 'Could not load the list');
         var m = {};
-        res.delegates.forEach(function(d){ m[d.id] = { n:d.n, o:d.o, c:d.c, t:d.t, d:d.d||'' }; });
+        res.delegates.forEach(function(d){
+          var prev = roster[d.id] || {};
+          m[d.id] = { n:d.n, o:d.o, c:d.c, t:d.t, d:d.d||'',
+                      e:d.e||'', p:d.p||'', lead: prev.lead || '' };
+        });
         // keep any local check-ins not yet synced
         queue.forEach(function(q){
           if (!m[q.id]) return;
@@ -10534,7 +10584,9 @@ function findAlignmentPattern(matrix, alignmentPatternQuads, topRight, topLeft, 
         });
         roster = m;
         save(LS.roster, roster);
-        if (res.categories) save(LS.cats, res.categories);
+        save(LS.mode, res.mode || 'desk');
+        save(LS.exh, res.exhibitor || '');
+        if (res.categories && res.categories.length) save(LS.cats, res.categories);
         fillCategories();
         cb(null, res.count);
       })
@@ -10564,7 +10616,12 @@ function findAlignmentPattern(matrix, alignmentPatternQuads, topRight, topLeft, 
   function begin(){
     $('login').className = 'hide';
     $('main').className = '';
-    $('deskName').textContent = load(LS.desk,'Desk 1');
+    var booth = isBooth();
+    $('deskName').textContent = booth ? (load(LS.exh,'') || 'Exhibition stand') : load(LS.desk,'Desk 1');
+    $('countLabel').textContent = booth ? 'leads' : 'in today';
+    // no walk-ins or check-in language at a stand
+    $('tabWalk').className = booth ? 'hide' : '';
+    if (booth) $('boothNote').className = 'boothnote';
     fillCategories();
     refreshCounts();
     startCam();
