@@ -79,6 +79,16 @@ body{background:#0B1524;color:#fff;min-height:100vh}
            font-size:.85rem;color:#93A5BB;margin-bottom:12px}
 .tiny{font-size:.78rem;color:#93A5BB;text-align:center;margin-top:14px}
 .tiny button{background:none;color:#7FB6DE;text-decoration:underline;font-size:.78rem}
+
+/* what this person is booked for, at the door */
+.result .bk{display:flex;align-items:center;gap:10px;margin-top:10px;padding:9px 12px;
+            border-radius:11px;background:rgba(255,255,255,.16);font-size:.84rem;
+            line-height:1.35;text-align:left}
+.result .bk b{flex:0 0 auto;min-width:34px;height:30px;border-radius:8px;background:#fff;
+              color:#0B1524;display:flex;align-items:center;justify-content:center;
+              font-weight:800;font-size:.95rem}
+.result .bk.w b{background:#F59E0B;color:#2B1A00}
+.result .bk.w{background:rgba(245,158,11,.26)}
 </style>
 </head>
 <body>
@@ -10302,12 +10312,27 @@ function findAlignmentPattern(matrix, alignmentPatternQuads, topRight, topLeft, 
   }
 
   /* ── result flash ── */
-  function flash(kind, big, who, sub){
+  function esc(s){
+    return String(s==null?'':s).replace(/[&<>"]/g,function(c){
+      return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c];
+    });
+  }
+
+  function flash(kind, big, who, sub, bk){
     var r = $('result');
     r.className = 'result show ' + kind;
     $('rBig').textContent = big;
     $('rWho').textContent = who || '';
-    $('rSub').textContent = sub || '';
+    var s = $('rSub');
+    if (bk && (bk.k || (bk.b && bk.b.length))){
+      s.innerHTML = (sub ? '<div>' + esc(sub) + '</div>' : '') +
+        '<div class="bk' + (bk.k === 'W' ? ' w' : '') + '">' +
+          (bk.k ? '<b>' + esc(bk.k) + '</b>' : '') +
+          '<span>' + esc((bk.b || []).join(' \u00b7 ')) + '</span>' +
+        '</div>';
+    } else {
+      s.textContent = sub || '';
+    }
     try{ navigator.vibrate && navigator.vibrate(kind === 'ok' ? 90 : [70,60,70]); }catch(e){}
     beep(kind === 'ok');
     clearTimeout(flash._t);
@@ -10328,6 +10353,8 @@ function findAlignmentPattern(matrix, alignmentPatternQuads, topRight, topLeft, 
     if (d.c) bits.push(d.c);
     var sub = $('rSub');
     sub.innerHTML = (bits.length ? '<div>' + bits.join(' \u00b7 ') + '</div>' : '') +
+      (d.k ? '<div class="bk' + (d.k === 'W' ? ' w' : '') + '"><b>' + esc(d.k) + '</b>' +
+             '<span>' + esc((d.b || []).join(' \u00b7 ')) + '</span></div>' : '') +
       (d.e ? '<div class="lead-c">' + d.e + '</div>' : '') +
       (d.p ? '<div class="lead-c">' + d.p + '</div>' : '');
     try{ navigator.vibrate && navigator.vibrate(kind === 'ok' ? 90 : [70,60,70]); }catch(e){}
@@ -10403,7 +10430,8 @@ function findAlignmentPattern(matrix, alignmentPatternQuads, topRight, topLeft, 
     save(LS.roster, roster); save(LS.queue, queue);
     refreshCounts();
     var nth = list.length;
-    flash('ok', 'WELCOME', d.n, (d.o || '') + (nth > 1 ? '  \u00b7  day ' + nth : ''));
+    flash('ok', 'WELCOME', d.n, (d.o || '') + (nth > 1 ? '  \u00b7  day ' + nth : ''),
+          { k:d.k, b:d.b });
     sync();
   }
 
@@ -10573,7 +10601,8 @@ function findAlignmentPattern(matrix, alignmentPatternQuads, topRight, topLeft, 
         res.delegates.forEach(function(d){
           var prev = roster[d.id] || {};
           m[d.id] = { n:d.n, o:d.o, c:d.c, t:d.t, d:d.d||'',
-                      e:d.e||'', p:d.p||'', lead: prev.lead || '' };
+                      e:d.e||'', p:d.p||'', k:d.k||'', b:d.b||[],
+                      lead: prev.lead || '' };
         });
         // keep any local check-ins not yet synced
         queue.forEach(function(q){
